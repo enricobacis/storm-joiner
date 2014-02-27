@@ -1,12 +1,16 @@
 package joiner.client;
 
-import joiner.JoinData;
+import joiner.DataServerConnector;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
 import org.zeromq.ZMQ.Socket;
 
 public class Client  {
+	
+	private final Logger logger = LoggerFactory.getLogger(Client.class);
 	
 	private ZContext context;
 	private Socket socket;
@@ -24,9 +28,10 @@ public class Client  {
 		context.destroy();
 	}
 	
-	public void queryJoin(JoinData ... datas) {
-		for (JoinData data: datas) {
-			socket.sendMore(data.getConnectionString() + " " + data.getColumn());
+	public void queryJoin(DataServerConnector ... datas) {
+		
+		for (DataServerConnector data: datas) {
+			socket.sendMore(data.toMsg());
 		}
 		socket.send("");
 		
@@ -37,25 +42,20 @@ public class Client  {
 			if (message.isEmpty())
 				break;
 			
-			System.out.println(message);
+			logger.info(message);
 		}
 	}
 	
-	public static void main(String[] args) {
-		
-		System.out.println("up");
-		
+	public static void main(String[] args) {		
 		Client client = new Client();
 		client.connect("tcp://127.0.0.1:5555");
-		client.queryJoin(new JoinData("1", "A"), new JoinData("2", "B"));
-		client.destroy();
 		
+		DataServerConnector sc1 = new DataServerConnector("tcp://127.0.0.1", 3000, "3", "4");
+		DataServerConnector sc2 = new DataServerConnector("tcp://127.0.0.1", 3000, "C", "D");
+		
+		client.queryJoin(sc1, sc2);
 		System.out.println("done");
-	}
-	
-	@Override
-	protected void finalize() throws Throwable {
-		super.finalize();
+		client.destroy();
 	}
 
 }
