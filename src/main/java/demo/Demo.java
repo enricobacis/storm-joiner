@@ -3,14 +3,14 @@ package demo;
 import joiner.DataServerConnector;
 import joiner.client.Client;
 import joiner.computational.ComputationalServer;
-import joiner.server.DataServer;
+import joiner.server.BaseDataServer;
 
 public class Demo {
 	
 	public static void main(String[] args) {
 		try {
 			
-			DataServer ds = new DataServer(3000);
+			BaseDataServer ds = new BaseDataServer(null, 3000, "0123456789ABCDEF", null);
 			ds.start();
 			
 			ComputationalServer cs = new ComputationalServer(5555);

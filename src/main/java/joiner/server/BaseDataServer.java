@@ -16,9 +16,9 @@ import org.zeromq.ZMQ.Socket;
 
 import com.google.common.base.Function;
 
-public class DataServer extends Thread {
+public class BaseDataServer extends Thread {
 	
-	private final Logger logger = LoggerFactory.getLogger(DataServer.class);
+	private final Logger logger = LoggerFactory.getLogger(BaseDataServer.class);
 	
 	private final Cipher cipher;
 	private final Connection database;
@@ -29,12 +29,12 @@ public class DataServer extends Thread {
 	
 	private int lastPort;
 	
-	public DataServer(Connection database, int helloPort, String AESkey, Function<Object, Boolean> needsTwin) throws Exception {
+	public BaseDataServer(Connection database, int helloPort, String AESkey, Function<Object, Boolean> needsTwin) throws Exception {
 		this.database = database;
 		this.helloPort = helloPort;
 		this.lastPort = helloPort;
 		
-		cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+		cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
 		// TODO make it salted
 		SecretKey secretKey = new SecretKeySpec(AESkey.getBytes(), "AES");
 		cipher.init(Cipher.ENCRYPT_MODE, secretKey);
@@ -58,7 +58,6 @@ public class DataServer extends Thread {
 			helloContext.destroy();
 			logger.info("DataServer DOWN");
 		}
-		
 	}
 	
 	private void receiveRequest() {
@@ -67,15 +66,6 @@ public class DataServer extends Thread {
 		DataWorker dw = new DataWorker(++lastPort, request, cipher);
 		dw.start();
 		helloSocket.send(Integer.toString(lastPort));
-	}
-
-	public static void main(String[] args) {
-		try {
-			DataServer ds = new DataServer(3000);
-			ds.start();
-		} catch ( Exception e ) {
-			e.printStackTrace();
-		}
 	}
 
 }

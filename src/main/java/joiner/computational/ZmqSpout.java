@@ -1,7 +1,6 @@
 package joiner.computational;
 
 import java.util.Map;
-import java.util.Observer;
 
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
@@ -21,13 +20,15 @@ public class ZmqSpout extends BaseRichSpout {
 	
 	private SpoutOutputCollector collector;
 	private String socketString;
+	private String killerSocketString;
 	private ZContext context;
 	private Socket input;
 	
-	public ZmqSpout(String socketString) {
+	public ZmqSpout(String socketString, String killerSocketString) {
 		this.socketString = socketString;
+		this.killerSocketString = killerSocketString;
 	}
-
+	
 	@Override
 	@SuppressWarnings("rawtypes")
 	public void open(Map conf, TopologyContext context, SpoutOutputCollector collector) {
@@ -36,13 +37,16 @@ public class ZmqSpout extends BaseRichSpout {
 		this.input = this.context.createSocket(ZMQ.PULL);
 		this.input.connect(socketString);
 	}
-
+	
 	@Override
 	public void nextTuple() {
 		String message = new String(input.recv());
 		
 		if (message.isEmpty()) {
-			// TODO SEND TO INPROC
+			
+			Socket killerSocket = context.createSocket(ZMQ.REQ);
+			killerSocket.connect(killerSocketString);
+			killerSocket.send(socketString);
 			
 			// NO-OP
 			while (true)
