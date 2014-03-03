@@ -1,10 +1,12 @@
 package joiner.server;
 
-import java.nio.ByteBuffer;
+import java.util.List;
 
 import javax.crypto.Cipher;
 
 import joiner.DataServerRequest;
+import joiner.Prefix;
+import joiner.twins.TwinFunction;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,36 +21,50 @@ public class DataWorker extends Thread {
 	private final int outputPort;
 	private final Cipher cipher;
     private final DataServerRequest request;
+    private final List<?> markers;
+    private final TwinFunction twin;
+    private Socket socket;
 	
-	public DataWorker(int outputPort, DataServerRequest request, Cipher cipher) {
+	public DataWorker(int outputPort, DataServerRequest request, Cipher cipher, List<?> markers, TwinFunction twin) {
 		this.outputPort = outputPort;
 		this.request = request;
 		this.cipher = cipher;
+		this.markers = markers;
+		this.twin = twin;
 	}
 	
 	@Override
 	public void run() {
 		
 		ZContext context = new ZContext();
-		Socket socket = context.createSocket(ZMQ.PUSH);
+		socket = context.createSocket(ZMQ.PUSH);
 		
 		try {
+			// Tell the socket to not drop the packets
 			socket.setHWM(1000000);
-			socket.bind("tcp://*:" + outputPort);
 			
+			// Open the output socket
+			socket.bind("tcp://*:" + outputPort);
 			logger.info("Start pushing data to port {}", outputPort);
 			
-			for (int i = 0; i < 10; ++i) {
-				socket.send(cipher.doFinal(ByteBuffer.allocate(4).putInt(i).array()));
-			}
+			// This is a fake DataWorker, it generates the data
+			int from = Integer.parseInt(request.getTable());
+			int to = Integer.parseInt(request.getColumn());
+			
+			// Send all the markers (without their twins) [TODO shuffle them with the data]
+			for (Object marker: markers)
+				encryptAndSend(marker.toString(), Prefix.MARKER, false);
+			
+			// Send the data (with the twins)
+			for (int i = from; i <= to; ++i)
+				encryptAndSend(Integer.toString(i), Prefix.DATA, true);
 			
 			// Signal the end of the connection
 			socket.send("");
-			
 			logger.info("All data pushed to port {}", outputPort);
 			
 			// Avoid closing the socket before elements are put in the queue
-			Thread.sleep(1000);
+			Thread.sleep(60000);
 			
 		} catch ( Exception e ) {
 			
@@ -64,6 +80,15 @@ public class DataWorker extends Thread {
 			
 		}
 		
+	}
+	
+	private void encryptAndSend(String data, Prefix prefix, boolean addTwin) throws Exception {
+		// send the message
+		socket.send(cipher.doFinal((prefix.getPrefix() + data).getBytes("UTF-8")));
+		
+		// send the twin if requested and needed
+		if (addTwin && twin.neededFor(data))
+			socket.send(cipher.doFinal((Prefix.TWIN.getPrefix() + data).getBytes("UTF-8")));
 	}
 	
 }

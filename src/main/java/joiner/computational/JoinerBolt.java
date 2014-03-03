@@ -4,6 +4,9 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import backtype.storm.task.OutputCollector;
 import backtype.storm.task.TopologyContext;
 import backtype.storm.topology.OutputFieldsDeclarer;
@@ -14,29 +17,37 @@ import backtype.storm.tuple.Values;
 
 public class JoinerBolt extends BaseRichBolt {
 	
+	@SuppressWarnings("unused")
+	private final Logger logger = LoggerFactory.getLogger(JoinerBolt.class);
+	
 	private static final long serialVersionUID = 2505025320748351627L;
 	
 	// TODO generalize to n tables using an hashmap
 	
 	private OutputCollector collector;
-	private Set<String> keys;
+	private Set<Bytes> keys;
 	
 	@Override
 	@SuppressWarnings("rawtypes")
 	public void prepare(Map conf, TopologyContext context, OutputCollector collector) {
 		this.collector = collector;
-		this.keys = new HashSet<String>(1000);
+		this.keys = new HashSet<Bytes>(1000);
 	}
 
 	@Override
 	public void execute(Tuple tuple) {
-		String key = tuple.getString(0);
+		Bytes message = (Bytes) tuple.getValue(0);
 		
-		if (keys.contains(key)) {
-			keys.remove(key);
-			collector.emit(new Values(key));
+		if (message.isEmpty())
+			collector.emit(new Values(message));
+		else if (keys.contains(message)) {
+			keys.remove(message);
+			collector.emit(new Values(message));
 		} else
-			keys.add(key);
+			keys.add(message);
+		
+		// TODO just for test
+		// Utils.sleep(2000);
 		
 		collector.ack(tuple);
 	}

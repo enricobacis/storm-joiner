@@ -12,19 +12,25 @@ import org.zeromq.ZMQ;
 import org.zeromq.ZMQ.Socket;
 
 public class ComputationalServer extends Thread {
-
-	private final Logger logger = LoggerFactory.getLogger(ComputationalServer.class);
 	
-	// TODO get from request
-	private final int JoinerParallelism = 2;
-	private final int numWorkers = 2;
+	// TODO restructure class as ROUTER/DEALER with Workers
+
+	private static final Logger logger = LoggerFactory.getLogger(ComputationalServer.class);
+	private static int topologyCounter = 0;
+	
+	private final int numWorkers; // number of JVM on the cluster (normally to be set to one per node)
+	private final int joinerParallelism; // number of executors (thread) of joiner bolts (spread to the workers)
+	private final int spoutParallelism; // number of spout executors
 
 	private final int incomingPort;
 	private ZContext context;
 	private Socket clientSocket;
 
-	public ComputationalServer(int incomingPort) {
+	public ComputationalServer(int incomingPort, int numWorkers, int joinerParallelism, int spoutParallelism) {
 		this.incomingPort = incomingPort;
+		this.numWorkers = numWorkers;
+		this.joinerParallelism = joinerParallelism;
+		this.spoutParallelism = spoutParallelism;
 	}
 
 	@Override
@@ -71,16 +77,27 @@ public class ComputationalServer extends Thread {
 
 		try {
 			
-			ZmqBolt output = new ZmqBolt(); 
-			JoinerTopology topology = new JoinerTopology(JoinerParallelism, numWorkers, output);
+			// TODO create a connection directly to the client (ROUTER/DEALER)
+			String topologyName = "topology-" + (++topologyCounter);
+			JoinerTopology topology = new JoinerTopology(topologyName, joinerParallelism, numWorkers);
 
 			for (DataServerConnector connector: receiveConnectors()) {
 				int port = connector.handShake();
 				logger.info("Assigned port: {} => {}", connector.getConnectionString(), port);
-				topology.addSpout(connector.getConnectionString() + ':' + port);
+				topology.addSpout(connector.getConnectionString().replaceFirst(":\\d+", ":" + port), spoutParallelism);
 			}
 			
 			topology.start();
+			
+			// TODO to be removed when we have a connection directly to the client
+			Socket topologySocket = context.createSocket(ZMQ.PAIR);
+			topologySocket.bind("ipc://" + topologyName);
+			while (true) {
+				byte[] message = topologySocket.recv();
+				clientSocket.send(message);
+				if (message.length == 0)
+					break;
+			}
 
 		} catch (Exception e) {
 			clientSocket.send("ERROR: " + e.getMessage());
@@ -88,7 +105,20 @@ public class ComputationalServer extends Thread {
 	}
 
 	public static void main(String[] args) {
-		ComputationalServer cs = new ComputationalServer(5555);
+		// example: 5555 1 2 1
+		
+		if (args.length != 4) {
+			logger.error("args: incomingPort numWorkers joinerParallelism spoutParallelism");
+			System.exit(1);
+		}
+		
+		int index = 0;
+		int incomingPort = Integer.parseInt(args[index++]);
+		int numWorkers = Integer.parseInt(args[index++]);
+		int joinerParallelism = Integer.parseInt(args[index++]);
+		int spoutParallelism = Integer.parseInt(args[index++]);
+		
+		ComputationalServer cs = new ComputationalServer(incomingPort, numWorkers, joinerParallelism, spoutParallelism);
 		cs.start();
 	}
 
