@@ -1,4 +1,4 @@
-package joiner;
+package joiner.commons;
 
 
 public enum Prefix {

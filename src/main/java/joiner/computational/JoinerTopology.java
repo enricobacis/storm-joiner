@@ -1,7 +1,6 @@
 package joiner.computational;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Arrays;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,94 +8,107 @@ import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
 import org.zeromq.ZMQ.Socket;
 
-import backtype.storm.Config;
-import backtype.storm.LocalCluster;
-import backtype.storm.topology.BoltDeclarer;
-import backtype.storm.topology.TopologyBuilder;
-import backtype.storm.tuple.Fields;
-
 public class JoinerTopology extends Thread {
 	
-	private final Logger logger = LoggerFactory.getLogger(JoinerTopology.class);
-
-	private final TopologyBuilder builder;
-	private final String topologyName;
-	private final String replySocketString;
-	private final String killerSocketString;
-	private final int joinerParallelism;
-	private final int numWorkers;
-	private final List<String> spouts;
-	private final LocalCluster cluster;
+	private static final Logger logger = LoggerFactory.getLogger(JoinerTopology.class);
 	
-	public JoinerTopology(String topologyName, int joinerParallelism, int numWorkers) {
-		this.topologyName = topologyName;
-		this.joinerParallelism = joinerParallelism;
-		this.numWorkers = numWorkers;
-		
-		replySocketString = "ipc://" + topologyName;
-		killerSocketString = replySocketString + "-killer";
-		
-		spouts = new ArrayList<String>();
-		builder = new TopologyBuilder();
-		cluster = new LocalCluster();
+	private final ZContext context;
+	private final Socket input;
+	private final String outputString;
+	
+	private Socket[] joiners;
+	private ComputationalWorker[] workers;
+	private int numSpouts = 0;
+	private int totalRecordsHint = 0;
+	
+	public JoinerTopology(String outputString, int numJoiners) {
+		this.outputString = outputString;
+		joiners = new Socket[numJoiners];
+		workers = new ComputationalWorker[numJoiners];
+		context = new ZContext();
+		input = context.createSocket(ZMQ.PULL);
 	}
 	
-	public void addSpout(String socketString, int parallelism_hint) {
-		builder.setSpout(socketString, new ZmqSpout(socketString), parallelism_hint);
-		spouts.add(socketString);
+	public void addSpout(String socketString, int recordsHint) {
+		input.connect(socketString);
+		totalRecordsHint += recordsHint;
+		++numSpouts;
 	}
 	
 	@Override
 	public void run() {
 		
-    	// Start a listener for completed spouts
-    	TopologyKiller killer = new TopologyKiller();
-    	killer.start();
+		logger.info("join started");
 		
-    	// create the joiner bolt
-		BoltDeclarer declarer = builder.setBolt("join", new JoinerBolt(), joinerParallelism);
-		
-		// connect all the spouts to the joiner bolt using fieldGrouping
-		for (String spout: spouts)
-			declarer = declarer.fieldsGrouping(spout, new Fields("key"));
-		
-		// create the output bolt with globalGrouping
-		builder.setBolt("output", new ZmqBolt(spouts.size(), replySocketString, killerSocketString), 1)
-			.globalGrouping("join");
-		
-		Config conf = new Config();
-	    conf.setNumWorkers(numWorkers);
-	    
-	    try {
-	    	logger.info("Starting topology");
-	        cluster.submitTopology(topologyName, conf, builder.createTopology());
+		try {
+			
+			createJoiners();
+			processInputs();
+			Thread.sleep(100);
+			
 		} catch (Exception e) {
 			e.printStackTrace();
-			kill();
-		}
-	}
-	
-	private void kill() {
-		logger.info("shutting down");
-		cluster.killTopology(topologyName);
-	    cluster.shutdown();
-	}
-
-	private class TopologyKiller extends Thread {
-		
-		@Override
-		public void run() {
-			ZContext context = new ZContext();
-			Socket killerSocket = context.createSocket(ZMQ.PAIR);
-			killerSocket.bind(killerSocketString);
-			
-			// wait for the job to be completed
-			killerSocket.recv();
-			kill();
-			
-			context.close();
+		} finally {
 			context.destroy();
 		}
 	}
-
+	
+	private void createJoiners() {
+		
+		int numJoiners = joiners.length;
+		int entriesHint = (int) (totalRecordsHint / numJoiners / 0.7);
+		
+		for (int i = 0; i < numJoiners; ++i) {
+			String socketString = "ipc://joiner-" + i;
+			
+			ComputationalWorker worker = new ComputationalWorker(socketString, outputString, entriesHint);
+			worker.start();
+			workers[i] = worker;
+			
+			Socket socket = context.createSocket(ZMQ.PUSH);
+			socket.connect(socketString);
+			joiners[i] = socket;
+		}
+	}
+	
+	private void processInputs() {
+		
+		int numJoiners = joiners.length;
+		int completedSpouts = 0;
+		
+		while (true) {
+			byte[] message = input.recv();
+			
+			if (message.length == 0) {
+				++completedSpouts;
+				logger.info("{}/{} spouts completed", completedSpouts, numSpouts);
+				if (completedSpouts == numSpouts)
+					break;
+			} else {
+				int joiner = (Arrays.hashCode(message) & Integer.MAX_VALUE) % numJoiners;
+				joiners[joiner].send(message);
+			}
+		}
+		
+		// send termination to joiners
+		for (Socket joiner: joiners)
+			joiner.send("");
+		
+		logger.info("all data sent to joiners");
+	}
+	
+	public void clean() {		
+		for (ComputationalWorker worker: workers)
+			worker.done();
+		
+		workers = null;
+		joiners = null;
+	}
+	
+	@Override
+	protected void finalize() throws Throwable {
+		clean();
+		super.finalize();
+	}
+	
 }

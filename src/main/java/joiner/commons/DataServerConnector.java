@@ -1,4 +1,5 @@
-package joiner;
+package joiner.commons;
+
 
 import org.zeromq.ZMQ;
 import org.zeromq.ZContext;
@@ -8,6 +9,10 @@ public class DataServerConnector {
 	
 	private final String connectionString;
 	private DataServerRequest request;
+	private ZContext context;
+	
+	private int port;
+	private int recordsHint;
 	
 	public DataServerConnector(String connectionString, String table, String column) {
 		this.connectionString = connectionString;
@@ -18,21 +23,40 @@ public class DataServerConnector {
 		return connectionString;
 	}
 	
-	public int handShake() throws Exception {
+	public int getPort() {
+		return port;
+	}
+	
+	public int getRecordsHint() {
+		return recordsHint;
+	}
+	
+	public void handShake() throws Exception {
 		
-		ZContext context = new ZContext();
+		context = new ZContext();
 		Socket server = context.createSocket(ZMQ.REQ);
 		server.connect(connectionString);
 		
 		server.send(request.toMsg());
 		String reply = new String(server.recv());
-		context.close();
 		context.destroy();
 		
 		if (reply.startsWith("ERROR"))
 			throw new Exception(reply);
 		
-		return Integer.parseInt(reply);
+		String[] parts = reply.split(" ");
+		port = Integer.parseInt(parts[0]);
+		recordsHint = Integer.parseInt(parts[1]);
+	}
+	
+	public void done() {
+		context = new ZContext();
+		Socket server = context.createSocket(ZMQ.REQ);
+		server.connect(connectionString);
+		
+		server.send("DONE " + port);
+		server.recv();       // ACK
+		context.destroy();
 	}
 	
 	public String toMsg() {

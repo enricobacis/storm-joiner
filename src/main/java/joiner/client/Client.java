@@ -1,18 +1,17 @@
 package joiner.client;
 
 import java.util.HashSet;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.Observable;
 import java.util.Set;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 
-import joiner.DataServerConnector;
-import joiner.Prefix;
-import joiner.twins.HashTwinFunction;
-import joiner.twins.TwinFunction;
+import joiner.commons.DataServerConnector;
+import joiner.commons.Prefix;
+import joiner.commons.twins.HashTwinFunction;
+import joiner.commons.twins.TwinFunction;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,7 +19,7 @@ import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
 import org.zeromq.ZMQ.Socket;
 
-public class Client  {
+public class Client extends Observable {
 	
 	private final static Logger logger = LoggerFactory.getLogger(Client.class);
 	
@@ -28,19 +27,22 @@ public class Client  {
 	private final Socket socket;
 	private final Cipher cipher;
 	
-	private final List<?> markers;
+	private final Set<String> markers;
 	private final TwinFunction twin;
 	
-	private Set<String> receivedTwins;
-	private Set<String> receivedMarkers;
-	private List<String> matches;
+	private Set<String> pendingTwins;
+	private Set<String> pendingMarkers;
+	private int receivedData;
+	private int receivedTwins;
 	
-	public Client(String key, List<?> markers, TwinFunction twin) throws Exception {
+	public Client(String key, Set<String> markers, TwinFunction twin) throws Exception {
 		this.cipher = createCipher(key);
 		this.markers = markers;
 		this.twin = twin;
 		this.context = new ZContext();
 		this.socket = context.createSocket(ZMQ.PAIR);
+		this.socket.setHWM(100000000);
+		this.socket.setLinger(-1);
 	}
 	
 	private Cipher createCipher(String key) throws Exception {
@@ -64,18 +66,22 @@ public class Client  {
 		sendDataConnectors(connectors);
 		
 		// initialize the data structures
-		matches = new LinkedList<String>();
-		receivedMarkers = new HashSet<String>();
-		receivedTwins = new HashSet<String>();
+		pendingMarkers = new HashSet<String>(markers);
+		pendingTwins = new HashSet<String>();
+		receivedData = 0;
+		receivedTwins = 0;
 		
 		// receive the messages and process them until completed
 		while (true) {
 			byte[] bytes = socket.recv();
+			
 			if (bytes.length == 0)
 				break;
+			
 			processMessage(bytes);
 		}
 		
+		socket.send("ACK");
 		validateResult();
 	}
 	
@@ -103,17 +109,24 @@ public class Client  {
 		
 		case DATA:
 			logger.debug("match: {}", payload);
-			matches.add(payload);
+			++receivedData;
+			
+			if (twin.neededFor(payload))
+				xorSet(pendingTwins, payload);
+			
+			setChanged();
+			notifyObservers(payload);
 			break;
 
 		case MARKER:
 			logger.debug("marker: {}", payload);
-			receivedMarkers.add(payload);
+			xorSet(pendingMarkers, payload);
 			break;
 
 		case TWIN:
 			logger.debug("twin: {}", payload);
-			receivedTwins.add(payload);
+			++receivedTwins;
+			xorSet(pendingTwins, payload);
 			break;
 
 		default:
@@ -126,55 +139,37 @@ public class Client  {
 		boolean valid = validateMarkers() & validateTwins();
 		
 		if (valid)
-			logger.info("VALID RESULT: {}", matches);
+			logger.info("RESULT VALID. #RECEIVED: {}", receivedData);
 		else
-			logger.info("RESULT NOT VALID");
+			logger.info("RESULT NOT VALID. #RECEIVED: {}", receivedData);
 		
 		return valid;
 	}
 
 	private boolean validateMarkers() {
-		List<String> missingMarkers = new LinkedList<String>();
-		
-		for (Object marker: markers) {
-			String markerString = marker.toString();
-			if (receivedMarkers.contains(markerString))
-				receivedMarkers.remove(markerString);
-			else
-				missingMarkers.add(markerString);
-		}
-		
-		logger.info("{} matched markers", markers.size() - receivedMarkers.size(), markers.size());
-		logger.info("{} missing markers: {}", missingMarkers.size(), missingMarkers);
-		logger.info("{} unmatched markers: {}", receivedMarkers.size(), receivedMarkers);
-		return (missingMarkers.isEmpty() && receivedMarkers.isEmpty());
+		logger.info("{} matched markers", markers.size() - pendingMarkers.size());
+		logger.info("{} unmatched markers: {}", pendingMarkers.size(), pendingMarkers);
+		return pendingMarkers.isEmpty();
 	}
 	
 	private boolean validateTwins() {
-		List<String> missingTwins = new LinkedList<String>();
-		int matchedTwins = 0;
-		
-		for (String match: matches) {
-			if (twin.neededFor(match)) {
-				if (receivedTwins.contains(match)) {
-					++matchedTwins;
-					receivedTwins.remove(match);
-				} else
-					missingTwins.add(match);
-			}
-		}
-		
-		logger.info("{} matched twins", matchedTwins);
-		logger.info("{} missing twins: {}", missingTwins.size(), missingTwins);
-		logger.info("{} unmatched twins: {}", receivedTwins.size(), receivedTwins);
-		return (missingTwins.isEmpty() && receivedTwins.isEmpty());
+		logger.info("{} matched twins", receivedTwins - pendingTwins.size());
+		logger.info("{} missing twins: {}", pendingTwins.size(), pendingTwins);
+		return pendingTwins.isEmpty();
+	}
+	
+	private <T> void xorSet(Set<T> set, T elem) {
+		if (set.contains(elem))
+			set.remove(elem);
+		else
+			set.add(elem);
 	}
 	
 	public static void main(String[] args) {
 		// example: ThisIsASecretKey tcp://127.0.0.1:5555 tcp://127.0.0.1:3000 1 10000 tcp://127.0.0.1:3000 8000 20000 10 0 1 2 3 4 5 6 7 8 9
 		
 		if (args.length < 9) {
-			logger.error("args: cipherKey csString sc1String table1 col1 sc2String table2 col2 oneTwinOutOf markers...");
+			logger.error("args: cipherKey csString sc1String table1 col1 sc2String table2 col2 oneTwinEvery markers...");
 			System.exit(1);
 		}
 		
@@ -185,10 +180,10 @@ public class Client  {
 		DataServerConnector sc1 = new DataServerConnector(args[index++], args[index++], args[index++]);
 		DataServerConnector sc2 = new DataServerConnector(args[index++], args[index++], args[index++]);
 		
-		int oneTwinOutOf = Integer.parseInt(args[index++]);
-		TwinFunction twin = new HashTwinFunction(oneTwinOutOf);
+		int oneTwinEvery = Integer.parseInt(args[index++]);
+		TwinFunction twin = new HashTwinFunction(oneTwinEvery);
 		
-		List<String> markers = new LinkedList<String>();
+		Set<String> markers = new HashSet<String>();
 		for (int i = index; i < args.length; ++i)
 			markers.add(args[i]);
 		

@@ -1,8 +1,10 @@
-package joiner.computational;
+package joiner.computationalstorm;
 
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+
+import joiner.commons.Bytes;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,7 +33,7 @@ public class JoinerBolt extends BaseRichBolt {
 	@SuppressWarnings("rawtypes")
 	public void prepare(Map conf, TopologyContext context, OutputCollector collector) {
 		this.collector = collector;
-		this.keys = new HashSet<Bytes>(1000);
+		this.keys = new HashSet<Bytes>(10000000);
 	}
 
 	@Override
@@ -45,9 +47,6 @@ public class JoinerBolt extends BaseRichBolt {
 			collector.emit(new Values(message));
 		} else
 			keys.add(message);
-		
-		// TODO just for test
-		// Utils.sleep(2000);
 		
 		collector.ack(tuple);
 	}

@@ -1,14 +1,10 @@
-package joiner.computational;
+package joiner.commons;
 
 import java.util.Arrays;
-
-import org.apache.commons.codec.binary.Base64;
 
 public class Bytes {
 	
 	private final byte[] bytes;
-	private Integer hashcode = null;
-	private String string = null;
 
     public Bytes(byte[] bytes) {
         if (bytes == null)
@@ -33,16 +29,12 @@ public class Bytes {
 
     @Override
     public int hashCode() {
-    	if (hashcode == null)
-    		hashcode = Arrays.hashCode(bytes); 
-        return hashcode;
+    	return Arrays.hashCode(bytes); 
     }
     
     @Override
     public String toString() {
-    	if (string == null)
-    		string = Base64.encodeBase64String(bytes);
-    	return string;
+    	return new String(bytes);
     }
 
 }

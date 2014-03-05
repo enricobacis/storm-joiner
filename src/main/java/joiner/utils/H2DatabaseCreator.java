@@ -1,4 +1,4 @@
-package joiner.server.utils;
+package joiner.utils;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
